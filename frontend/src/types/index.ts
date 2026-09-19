@@ -20,6 +20,13 @@ export interface ConstellationPoint {
   q: number
 }
 
+export interface WaterfallMeta {
+  rows: number
+  segmentSamples: number
+  fftMinSamples: number
+  sampleRate: number
+}
+
 export interface ModulationResult {
   type: string
   confidence: number
@@ -31,6 +38,8 @@ export interface ModulationResult {
 export interface AnalysisResult {
   spectrum: SpectrumData
   waterfall: WaterfallRow[]
+  waterfallMeta?: WaterfallMeta
+  sampleRate?: number
   constellation: ConstellationPoint[]
   modulation: ModulationResult
 }

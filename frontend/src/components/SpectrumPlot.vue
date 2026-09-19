@@ -14,14 +14,12 @@ const chart = ref<HTMLDivElement>()
 let instance: echarts.ECharts | null = null
 
 function update() {
-  if (!instance || !store.result) return
+  if (!instance) return
+  if (!store.result) { instance.clear(); return }
   const { frequencies, magnitudes } = store.result.spectrum
-  const n = frequencies.length
-  const halfN = Math.floor(n / 2)
-  const data = []
-  for (let i = 0; i < halfN; i++) {
-    data.push([frequencies[i], magnitudes[i]])
-  }
+  // Plot the full shifted spectrum (-fs/2 .. +fs/2), which matches the
+  // frequency axis of the waterfall panel.
+  const data: [number, number][] = frequencies.map((f, i) => [f, magnitudes[i]])
   instance.setOption({
     backgroundColor: 'transparent',
     grid: { left: 50, right: 15, top: 15, bottom: 35 },
@@ -32,7 +30,7 @@ function update() {
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(66,165,245,0.4)' }, { offset: 1, color: 'rgba(66,165,245,0.02)' }]) }
     }],
     animation: false
-  })
+  }, { notMerge: true }) // fully replace previous option; no stale axes/series
 }
 
 onMounted(() => {

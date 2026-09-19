@@ -3,18 +3,22 @@ import random
 import numpy as np
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 app = FastAPI(title="RF Signal Analyzer")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 MODULATION_TYPES = ["AM", "FM", "BPSK", "QPSK", "16QAM"]
 
+SAMPLE_RATE = 1000.0
+WATERFALL_TARGET_ROWS = 40
+WATERFALL_FFT_MIN = 32
+
 
 class GenerateRequest(BaseModel):
     modulation: str = "QPSK"
-    samples: int = 1024
-    snr: float = 20.0
+    samples: int = Field(default=1024, ge=64, le=65536)
+    snr: float = Field(default=20.0, ge=-20.0, le=60.0)
 
 
 def generate_signal(mod: str, samples: int, snr: float) -> np.ndarray:
@@ -60,7 +64,7 @@ def generate_signal(mod: str, samples: int, snr: float) -> np.ndarray:
     return i, q
 
 
-def compute_fft(i: np.ndarray, q: np.ndarray, fs: float = 1000.0):
+def compute_fft(i: np.ndarray, q: np.ndarray, fs: float = SAMPLE_RATE):
     """Compute FFT magnitude spectrum in dB"""
     iq = i + 1j * q
     n = len(iq)
@@ -71,24 +75,39 @@ def compute_fft(i: np.ndarray, q: np.ndarray, fs: float = 1000.0):
     return freqs.tolist(), mag_db.tolist()
 
 
-def compute_waterfall(i: np.ndarray, q: np.ndarray, fs: float = 1000.0, rows: int = 40):
-    """Compute spectrogram waterfall"""
+def compute_waterfall(i: np.ndarray, q: np.ndarray, fs: float = SAMPLE_RATE,
+                      target_rows: int = WATERFALL_TARGET_ROWS):
+    """Compute spectrogram waterfall.
+
+    Segment length adapts to the available samples so that small sample
+    sizes still produce rows (instead of returning an empty waterfall):
+    if 40 rows would make each segment shorter than WATERFALL_FFT_MIN,
+    the segment is held at that minimum and fewer rows are returned.
+    Only full segments are used so every row has the same number of
+    frequency bins and the columns line up across rows. Each row covers
+    the whole shifted spectrum so it matches the FFT spectrum panel.
+    """
     n = len(i)
-    seg = n // rows
+    seg = max(WATERFALL_FFT_MIN, n // target_rows)
+    rows = n // seg
     waterfall = []
     for r in range(rows):
-        seg_i = i[r * seg:(r + 1) * seg]
-        seg_q = q[r * seg:(r + 1) * seg]
-        if len(seg_i) < 32:
-            break
+        start, end = r * seg, (r + 1) * seg
+        seg_i = i[start:end]
+        seg_q = q[start:end]
         fft = np.fft.fftshift(np.fft.fft(seg_i + 1j * seg_q))
-        mag_db = 20 * np.log10(np.abs(fft) / len(seg_i) + 1e-10)
-        half = len(mag_db) // 2
+        mag_db = 20 * np.log10(np.abs(fft) / seg + 1e-10)
         waterfall.append({
-            "time": r * seg / fs,
-            "values": mag_db[half:].tolist()
+            "time": start / fs,
+            "values": mag_db.tolist()
         })
-    return waterfall
+    meta = {
+        "rows": rows,
+        "segmentSamples": seg,
+        "fftMinSamples": WATERFALL_FFT_MIN,
+        "sampleRate": fs,
+    }
+    return waterfall, meta
 
 
 def classify_modulation(i: np.ndarray, q: np.ndarray) -> dict:
@@ -132,7 +151,7 @@ def classify_modulation(i: np.ndarray, q: np.ndarray) -> dict:
 def generate_and_analyze(req: GenerateRequest):
     i, q = generate_signal(req.modulation, req.samples, req.snr)
     freqs, mags = compute_fft(i, q)
-    waterfall = compute_waterfall(i, q)
+    waterfall, waterfall_meta = compute_waterfall(i, q)
     modulation = classify_modulation(i, q)
 
     n = len(i)
@@ -142,6 +161,8 @@ def generate_and_analyze(req: GenerateRequest):
     return {
         "spectrum": {"frequencies": freqs, "magnitudes": mags},
         "waterfall": waterfall,
+        "waterfallMeta": waterfall_meta,
+        "sampleRate": SAMPLE_RATE,
         "constellation": constellation,
         "modulation": modulation
     }
