@@ -1,7 +1,7 @@
 import math
 import random
 import numpy as np
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -17,7 +17,7 @@ class GenerateRequest(BaseModel):
     snr: float = 20.0
 
 
-def generate_signal(mod: str, samples: int, snr: float) -> np.ndarray:
+def generate_signal(mod: str, samples: int, snr: float) -> tuple:
     """Generate IQ samples for given modulation"""
     t = np.arange(samples) / samples * 10  # time vector
     i, q = np.zeros(samples), np.zeros(samples)
@@ -71,22 +71,29 @@ def compute_fft(i: np.ndarray, q: np.ndarray, fs: float = 1000.0):
     return freqs.tolist(), mag_db.tolist()
 
 
-def compute_waterfall(i: np.ndarray, q: np.ndarray, fs: float = 1000.0, rows: int = 40):
-    """Compute spectrogram waterfall"""
+def compute_waterfall(i: np.ndarray, q: np.ndarray, fs: float = 1000.0, rows: int = 40, min_seg: int = 16):
+    """Compute spectrogram waterfall.
+
+    Segment length adapts to the signal length so short signals still yield
+    a usable waterfall. Returns [] only when there are fewer than min_seg
+    samples, in which case a waterfall genuinely cannot be computed.
+    Each row holds the full fftshifted magnitude (same frequency range as
+    the spectrum endpoint) so the panels stay consistent.
+    """
     n = len(i)
-    seg = n // rows
+    if n < min_seg:
+        return []
+    seg = max(min_seg, n // rows)
+    n_rows = min(rows, n // seg)
     waterfall = []
-    for r in range(rows):
+    for r in range(n_rows):
         seg_i = i[r * seg:(r + 1) * seg]
         seg_q = q[r * seg:(r + 1) * seg]
-        if len(seg_i) < 32:
-            break
         fft = np.fft.fftshift(np.fft.fft(seg_i + 1j * seg_q))
         mag_db = 20 * np.log10(np.abs(fft) / len(seg_i) + 1e-10)
-        half = len(mag_db) // 2
         waterfall.append({
             "time": r * seg / fs,
-            "values": mag_db[half:].tolist()
+            "values": mag_db.tolist()
         })
     return waterfall
 
@@ -130,6 +137,13 @@ def classify_modulation(i: np.ndarray, q: np.ndarray) -> dict:
 
 @app.post("/api/generate")
 def generate_and_analyze(req: GenerateRequest):
+    if req.modulation not in MODULATION_TYPES:
+        raise HTTPException(status_code=400, detail=f"不支持的调制方式: {req.modulation}，可选: {MODULATION_TYPES}")
+    if not 16 <= req.samples <= 65536:
+        raise HTTPException(status_code=400, detail="样本数需在 16 ~ 65536 之间")
+    if not -20 <= req.snr <= 80:
+        raise HTTPException(status_code=400, detail="SNR 需在 -20 ~ 80 dB 之间")
+
     i, q = generate_signal(req.modulation, req.samples, req.snr)
     freqs, mags = compute_fft(i, q)
     waterfall = compute_waterfall(i, q)

@@ -12,7 +12,9 @@ const store = useSignalStore()
 const cvs = ref<HTMLCanvasElement>()
 
 function draw() {
-  const c = cvs.value!; const ctx = c.getContext('2d')!; const W = c.width, H = c.height
+  const c = cvs.value
+  if (!c) return
+  const ctx = c.getContext('2d')!; const W = c.width, H = c.height
   ctx.fillStyle = '#0d1520'; ctx.fillRect(0, 0, W, H)
   ctx.strokeStyle = '#2a3a4a'; ctx.lineWidth = 1
   ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke()
